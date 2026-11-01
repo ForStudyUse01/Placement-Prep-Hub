@@ -99,14 +99,34 @@ export function sanitize(raw, fallbackTitle = "Explainer") {
   return { title, scenes: out };
 }
 
-// Seconds a scene needs at speaking rate 1.
-export function estimateDuration(sc) {
-  const w = words(sc.narration).length;
-  const speak = w / 2.6 + 0.8;
-  const anim = sc.type === "title" ? 3 : sc.type === "callout" ? 4 : sc.type === "bullets" ? (sc.bullets?.length || 1) * 1.1 + 1
+// Make narration friendlier for speech engines: spell out Big-O and symbols.
+export function speakable(t) {
+  return String(t)
+    .replace(/O\(1\)/g, "O of one")
+    .replace(/O\(n\s*log\s*n\)/gi, "O of n log n")
+    .replace(/O\(log\s*n\)/gi, "O of log n")
+    .replace(/O\(n\^?2\)|O\(n²\)/g, "O of n squared")
+    .replace(/O\(2\^n\)|O\(2ⁿ\)/g, "O of two to the n")
+    .replace(/O\(n\)/g, "O of n")
+    .replace(/==/g, " equals ").replace(/!=/g, " is not equal to ").replace(/<=/g, " is at most ").replace(/>=/g, " is at least ")
+    .replace(/->|→/g, " to ")
+    .replace(/\bvs\.?\b/gi, "versus").replace(/\be\.g\./gi, "for example").replace(/\bi\.e\./gi, "that is")
+    .replace(/[`*_#]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Seconds the on-screen animation needs, independent of the voice.
+export function animDuration(sc) {
+  return sc.type === "title" ? 3 : sc.type === "callout" ? 4 : sc.type === "bullets" ? (sc.bullets?.length || 1) * 1.1 + 1
     : sc.type === "flow" ? (sc.steps?.length || 1) * 1.4 + 1 : sc.type === "array" ? Math.max(1, sc.steps?.length || 1) * 1.7 + 1
     : sc.type === "code" ? (sc.lines?.length || 1) * 0.35 + Math.max(1, sc.steps?.length || 1) * 1.4 + 1 : 5;
-  return Math.max(3, speak, anim);
+}
+
+// Seconds a scene needs at speaking rate 1 (estimated speech vs animation, whichever is longer).
+export function estimateDuration(sc) {
+  const speak = words(speakable(sc.narration)).length / 2.6 + 0.8;
+  return Math.max(3, speak, animDuration(sc));
 }
 
 /* ---------------- offline generators (no AI key needed) ---------------- */

@@ -4,10 +4,13 @@ import { PROVIDERS, getKey, callAI } from "../ai.js";
 import { renderHTML, escapeHtml as esc } from "../dom.js";
 import { get, set } from "../storage.js";
 import { Player, THEMES } from "../video/engine.js";
-import { buildMessages, parseScript, sanitize, offlineFromText, offlineFromTopic, toSrt, shorten } from "../video/script.js";
+import { buildMessages, parseScript, sanitize, offlineFromText, offlineFromTopic, toSrt, shorten, speakable } from "../video/script.js";
+import { ENGINES, KOKORO_VOICES, GEMINI_VOICES, rankBrowserVoices, prepareClips } from "../video/tts.js";
 
 let player = null;
 let mode = "topic";
+let keyHandler = null;
+let idleTimer = null;
 
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const download = (blob, name) => {
@@ -51,20 +54,26 @@ async function loadPdfText(file) {
 }
 
 export function unmount() {
+  if (keyHandler) document.removeEventListener("keydown", keyHandler);
+  keyHandler = null;
+  clearTimeout(idleTimer);
+  document.body.style.overflow = "";
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   if (player) player.destroy();
   player = null;
 }
 
 export function render(root) {
-  if (player) player.destroy();
-  player = null;
+  unmount();
   const hasKey = Object.keys(PROVIDERS).some((p) => getKey(p));
+  const hasGemini = !!getKey("gemini");
   let script = null;
+  let clipsKey = null;
 
   renderHTML(root, `
     <div class="kicker">New</div>
     <h1>Video Explainer</h1>
-    <p class="lead">Turn a topic, a prompt or a document into an animated, narrated explainer video. Pick a source, press Generate, then play it, edit the script, or record a video file.</p>
+    <p class="lead">Turn a topic, a prompt or a document into an animated, narrated explainer video. Pick a source, press Generate, then play it, go fullscreen, edit the script, or record a video file.</p>
 
     <div class="vl-grid">
       <div class="card" id="create">
@@ -89,32 +98,39 @@ export function render(root) {
           <div class="field" style="border:none;padding-right:8px"><label>Scenes</label><select id="scenes"><option>5</option><option selected>7</option><option>9</option><option>11</option></select></div>
           <div class="field" style="border:none"><label>Level</label><select id="level"><option>Beginner</option><option selected>Exam revision</option><option>Advanced</option></select></div>
           <div class="field" style="border:none;padding-right:8px"><label>Look</label><select id="theme">${Object.keys(THEMES).map((t) => `<option>${t}</option>`).join("")}</select></div>
-          <div class="field" style="border:none"><label>Writer</label><select id="engine"><option value="ai" ${hasKey ? "" : "disabled"}>AI (your key)</option><option value="offline" ${hasKey ? "" : "selected"}>Offline (no AI)</option></select></div>
+          <div class="field" style="border:none"><label>Script writer</label><select id="engine"><option value="ai" ${hasKey ? "" : "disabled"}>AI (your key)</option><option value="offline" ${hasKey ? "" : "selected"}>Offline (no AI)</option></select></div>
         </div>
         <button class="btn" id="gen">Generate video</button>
         <p class="muted" id="status" style="margin:10px 0 0;font-size:13px">${hasKey ? "AI key found. Offline mode works without one." : "No AI key set. Offline mode builds videos from the text you give it, or from a site topic. Add a key in Settings for full AI scripts."}</p>
       </div>
 
       <div id="stage">
-        <canvas id="cv" style="width:100%;height:auto;border:1px solid var(--border);background:var(--panel);display:block"></canvas>
-        <div class="vctl" style="margin-top:10px">
-          <button class="btn secondary" id="prev">Prev</button>
-          <button class="btn" id="play">Play</button>
-          <button class="btn secondary" id="next">Next</button>
-          <span class="muted" id="time" style="font-family:var(--mono);font-size:12px">0:00 / 0:00</span>
+        <div id="player">
+          <canvas id="cv" style="width:100%;height:auto;border:1px solid var(--border);background:var(--panel);display:block;cursor:pointer"></canvas>
+          <div class="vctl" id="pctl">
+            <button class="btn secondary" id="prev">Prev</button>
+            <button class="btn" id="play">Play</button>
+            <button class="btn secondary" id="next">Next</button>
+            <span class="vtime" id="time">0:00 / 0:00</span>
+            <span style="flex:1"></span>
+            <button class="btn secondary" id="capsBtn">Captions: on</button>
+            <button class="btn secondary" id="voiceBtn">Voice: on</button>
+            <button class="btn secondary" id="fs">Fullscreen</button>
+          </div>
         </div>
-        <div class="vrow" style="margin-top:6px">
-          <label style="margin:0"><input type="checkbox" id="voiceOn" checked/> Voice</label>
-          <label style="margin:0"><input type="checkbox" id="capsOn" checked/> Captions</label>
-          <select id="voice" style="max-width:210px"></select>
-          <select id="speed"><option value="0.85">0.85x</option><option value="1" selected>1x</option><option value="1.15">1.15x</option><option value="1.3">1.3x</option></select>
+
+        <div class="vrow" style="margin-top:12px">
+          <select id="vengine" title="Voice engine">${ENGINES.map(([k, n]) => `<option value="${k}" ${k === "gemini" && !hasGemini ? "disabled" : ""}>${esc(n)}</option>`).join("")}</select>
+          <select id="voice" style="max-width:230px" title="Voice"></select>
+          <select id="speed" title="Speed"><option value="0.85">0.85x</option><option value="1" selected>1x</option><option value="1.15">1.15x</option><option value="1.3">1.3x</option></select>
         </div>
+        <p class="muted" id="voiceStatus" style="font-size:13px;margin:0 0 8px">Tip: for the most natural sound pick the Neural or Gemini voice. Keys: F fullscreen, Space play, arrows scenes, C captions, M voice.</p>
         <div class="vctl">
           <button class="btn secondary" id="rec">Record video (WebM)</button>
           <button class="btn secondary" id="srt">Subtitles (.srt)</button>
           <button class="btn secondary" id="json">Script (.json)</button>
         </div>
-        <p class="muted" id="recNote" style="font-size:12px;margin:0">Recording runs in real time, so it takes as long as the video. The file is silent with burned-in captions; use a screen recorder if you want the voice in the file.</p>
+        <p class="muted" id="recNote" style="font-size:12px;margin:0">Recording runs in real time, so it takes as long as the video. With the Neural or Gemini voice the file includes the voice. With the browser voice the file is silent with burned-in captions.</p>
         <div class="chip-filter" id="chips" style="margin-top:12px"></div>
       </div>
     </div>
@@ -129,6 +145,7 @@ export function render(root) {
 
   const $ = (s) => root.querySelector(s);
   const status = (msg, bad) => { const el = $("#status"); el.textContent = msg; el.style.color = bad ? "var(--danger)" : ""; };
+  const voiceStatus = (msg, bad) => { const el = $("#voiceStatus"); if (!el) return; el.textContent = msg; el.style.color = bad ? "var(--danger)" : ""; };
 
   /* ---- mode switching ---- */
   const setMode = (m) => {
@@ -146,46 +163,161 @@ export function render(root) {
   const playBtn = $("#play");
   player = new Player($("#cv"), {
     onUpdate: (p) => {
+      const t = $("#time");
+      if (!t) return;
       playBtn.textContent = p.playing ? "Pause" : "Play";
-      $("#time").textContent = `${fmt(p.elapsed)} / ${fmt(p.total)}`;
+      t.textContent = `${fmt(p.elapsed)} / ${fmt(p.total)}`;
       root.querySelectorAll("#chips .chip").forEach((c, i) => c.classList.toggle("active", i === p.idx));
     }
   });
   player.setTheme($("#theme").value);
-  playBtn.addEventListener("click", () => player.toggle());
-  $("#prev").addEventListener("click", () => player.prev());
-  $("#next").addEventListener("click", () => player.next());
-  $("#theme").addEventListener("change", (e) => player.setTheme(e.target.value));
-  $("#voiceOn").addEventListener("change", (e) => player.setSpeech(e.target.checked));
-  $("#capsOn").addEventListener("change", (e) => { player.captions = e.target.checked; });
-  $("#speed").addEventListener("change", (e) => { player.setRate(Number(e.target.value)); player._emit(); });
 
   /* ---- voices ---- */
+  const savedEngine = get("video:vengine", "browser");
+  $("#vengine").value = savedEngine === "gemini" && !hasGemini ? "browser" : savedEngine;
+  let browserVoices = [];
   const fillVoices = () => {
-    if (!("speechSynthesis" in window)) { $("#voice").style.display = "none"; return; }
-    const all = window.speechSynthesis.getVoices();
-    const en = all.filter((v) => /^en/i.test(v.lang));
-    const list = en.length ? en : all;
-    const saved = get("video:voice", "");
-    renderHTML($("#voice"), list.map((v) => `<option value="${esc(v.name)}" ${v.name === saved ? "selected" : ""}>${esc(v.name)} (${esc(v.lang)})</option>`).join(""));
-    player.voice = list.find((v) => v.name === ($("#voice").value || saved)) || list[0] || null;
+    const eng = $("#vengine").value;
+    const sel = $("#voice");
+    const saved = get(`video:voice:${eng}`, "");
+    let opts = [];
+    if (eng === "browser") {
+      browserVoices = "speechSynthesis" in window ? rankBrowserVoices(window.speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang))) : [];
+      if (!browserVoices.length && "speechSynthesis" in window) browserVoices = rankBrowserVoices(window.speechSynthesis.getVoices());
+      opts = browserVoices.map((v, i) => [v.name, `${i === 0 ? "★ " : ""}${v.name} (${v.lang})`]);
+    } else opts = eng === "kokoro" ? KOKORO_VOICES : GEMINI_VOICES;
+    renderHTML(sel, opts.map(([v, n]) => `<option value="${esc(v)}" ${v === saved ? "selected" : ""}>${esc(n)}</option>`).join(""));
+    if (eng === "browser") player.voice = browserVoices.find((v) => v.name === sel.value) || browserVoices[0] || null;
   };
   if ("speechSynthesis" in window) window.speechSynthesis.onvoiceschanged = fillVoices;
   fillVoices();
-  $("#voice").addEventListener("change", (e) => {
-    set("video:voice", e.target.value);
-    player.voice = window.speechSynthesis.getVoices().find((v) => v.name === e.target.value) || null;
+
+  const ensureVoice = async () => {
+    const eng = $("#vengine").value;
+    if (!script) return true;
+    if (eng === "browser") { if (player.clipsReady) { player.setClips(null); clipsKey = null; } return true; }
+    const key = `${eng}|${$("#voice").value}|${script.scenes.map((s) => s.narration).join("|")}`;
+    if (clipsKey === key && player.clipsReady) return true;
+    try {
+      voiceStatus("Preparing voice…");
+      const raw = await prepareClips(script.scenes.map((s) => speakable(s.narration)), eng, $("#voice").value, voiceStatus);
+      player.setClips(raw);
+      clipsKey = key;
+      voiceStatus("Voice ready.");
+      return true;
+    } catch (e) {
+      voiceStatus(`${e.message} Switching to the browser voice.`, true);
+      $("#vengine").value = "browser";
+      fillVoices();
+      player.setClips(null);
+      clipsKey = null;
+      return false;
+    }
+  };
+
+  $("#vengine").addEventListener("change", () => {
+    set("video:vengine", $("#vengine").value);
+    fillVoices();
+    player.pause();
+    player.setClips(null);
+    clipsKey = null;
+    const e = $("#vengine").value;
+    voiceStatus(e === "kokoro" ? "Neural voice selected. Best quality but slower: the model (~90 MB) downloads once, and each scene takes a while to render. It starts as soon as a video is generated." : e === "gemini" ? "Gemini voice selected. Audio is generated with your key when you press Play." : "Browser voice selected.");
   });
+  $("#voice").addEventListener("change", (e) => {
+    const eng = $("#vengine").value;
+    set(`video:voice:${eng}`, e.target.value);
+    if (eng === "browser") player.voice = browserVoices.find((v) => v.name === e.target.value) || null;
+    else { player.pause(); player.setClips(null); clipsKey = null; }
+  });
+
+  /* ---- transport ---- */
+  const togglePlay = async () => {
+    if (!script) return status("Generate a video first.", true);
+    if (!player.playing) {
+      playBtn.disabled = true;
+      await ensureVoice();
+      playBtn.disabled = false;
+    }
+    player.toggle();
+  };
+  playBtn.addEventListener("click", togglePlay);
+  $("#cv").addEventListener("click", togglePlay);
+  $("#prev").addEventListener("click", () => player.prev());
+  $("#next").addEventListener("click", () => player.next());
+  $("#theme").addEventListener("change", (e) => player.setTheme(e.target.value));
+  $("#speed").addEventListener("change", (e) => { player.setRate(Number(e.target.value)); player._emit(); });
+
+  const capsBtn = $("#capsBtn"), voiceBtn = $("#voiceBtn");
+  const toggleCaps = () => { player.captions = !player.captions; capsBtn.textContent = `Captions: ${player.captions ? "on" : "off"}`; };
+  const toggleVoice = () => { player.setSpeech(!player.speechOn); voiceBtn.textContent = `Voice: ${player.speechOn ? "on" : "off"}`; };
+  capsBtn.addEventListener("click", toggleCaps);
+  voiceBtn.addEventListener("click", toggleVoice);
+
+  /* ---- fullscreen ---- */
+  const box = $("#player");
+  const isFs = () => document.fullscreenElement === box || box.classList.contains("pseudo-fs");
+  const wake = () => {
+    box.classList.remove("idle");
+    clearTimeout(idleTimer);
+    if (isFs()) idleTimer = setTimeout(() => box.classList.add("idle"), 2500);
+  };
+  const syncFs = () => {
+    const fsBtn = $("#fs");
+    if (!fsBtn) return;
+    fsBtn.textContent = isFs() ? "Exit fullscreen" : "Fullscreen";
+    document.body.style.overflow = box.classList.contains("pseudo-fs") ? "hidden" : "";
+    wake();
+  };
+  // Uses the browser's real fullscreen; falls back to filling the window where that is blocked (e.g. embedded browsers).
+  let userExited = false;
+  const toggleFs = async () => {
+    userExited = false;
+    if (document.fullscreenElement) { userExited = true; await document.exitFullscreen().catch(() => {}); return; }
+    if (box.classList.contains("pseudo-fs")) { box.classList.remove("pseudo-fs"); syncFs(); return; }
+    const enterPseudo = () => {
+      if (document.fullscreenElement !== box && !box.classList.contains("pseudo-fs") && !userExited) { box.classList.add("pseudo-fs"); syncFs(); }
+    };
+    try {
+      if (!box.requestFullscreen) throw new Error("unsupported");
+      const p = box.requestFullscreen();
+      if (p && p.catch) p.catch(enterPseudo);
+      // Some embedded browsers never answer the request: do not wait for it.
+      setTimeout(enterPseudo, 700);
+    } catch {
+      enterPseudo();
+    }
+  };
+  $("#fs").addEventListener("click", toggleFs);
+  $("#cv").addEventListener("dblclick", toggleFs);
+  box.addEventListener("mousemove", wake);
+  document.addEventListener("fullscreenchange", syncFs);
+  keyHandler = (e) => {
+    if (!player || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "Escape" && box.classList.contains("pseudo-fs")) { box.classList.remove("pseudo-fs"); syncFs(); return; }
+    const tag = (e.target.tagName || "").toLowerCase();
+    if (["input", "textarea", "select", "button"].includes(tag)) return;
+    const k = e.key.toLowerCase();
+    if (e.code === "Space") { e.preventDefault(); togglePlay(); }
+    else if (k === "f") toggleFs();
+    else if (e.key === "ArrowRight") player.next();
+    else if (e.key === "ArrowLeft") player.prev();
+    else if (k === "c") toggleCaps();
+    else if (k === "m") toggleVoice();
+  };
+  document.addEventListener("keydown", keyHandler);
 
   /* ---- script handling ---- */
   const setScript = (s) => {
     script = s;
+    clipsKey = null;
     player.load(s);
     player.setRate(Number($("#speed").value));
     $("#scriptJson").value = JSON.stringify(s, null, 2);
     renderHTML($("#chips"), s.scenes.map((sc, i) => `<span class="chip" data-i="${i}">${i + 1}. ${esc(sc.type)}</span>`).join(""));
     root.querySelectorAll("#chips .chip").forEach((c) => c.addEventListener("click", () => player.goto(Number(c.dataset.i))));
     player._emit();
+    if ($("#vengine").value !== "browser") ensureVoice();
   };
 
   $("#apply").addEventListener("click", () => {
@@ -212,10 +344,12 @@ export function render(root) {
   /* ---- downloads ---- */
   $("#srt").addEventListener("click", () => script ? download(new Blob([toSrt(script, player.rate)], { type: "text/plain" }), slug(script.title) + ".srt") : status("Generate a video first.", true));
   $("#json").addEventListener("click", () => script ? download(new Blob([JSON.stringify(script, null, 2)], { type: "application/json" }), slug(script.title) + ".json") : status("Generate a video first.", true));
-  $("#rec").addEventListener("click", () => {
+  $("#rec").addEventListener("click", async () => {
     if (!script) return status("Generate a video first.", true);
     const btn = $("#rec");
     btn.disabled = true;
+    btn.textContent = "Preparing…";
+    await ensureVoice();
     btn.textContent = "Recording…";
     const ok = player.record((blob) => {
       download(blob, slug(script.title) + ".webm");

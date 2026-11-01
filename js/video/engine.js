@@ -1,7 +1,7 @@
 // Canvas animation engine for Video Explainer scripts (see script.js).
 // Draws 1280x720 frames, narrates with the browser's speech synthesis, shows captions,
 // and can record the canvas to a WebM file.
-import { estimateDuration, sentences } from "./script.js";
+import { estimateDuration, animDuration, sentences, speakable } from "./script.js";
 
 export const W = 1280;
 export const H = 720;
@@ -280,12 +280,19 @@ export class Player {
     this.dur = [];
     this.last = performance.now();
     this.recorder = null;
+    this.ac = null;
+    this.master = null;
+    this.dest = null;
+    this.clips = [];
+    this.src = null;
     this._tick = this._tick.bind(this);
     this.raf = requestAnimationFrame(this._tick);
   }
 
   load(script) {
     this.stopSpeech();
+    this._stopClip();
+    this.clips = [];
     this.script = script;
     this.idx = 0;
     this.t = 0;
@@ -295,20 +302,77 @@ export class Player {
     this._emit();
   }
 
-  _durations() { this.dur = (this.script?.scenes || []).map((sc) => estimateDuration(sc) / this.rate); }
-  setRate(r) { this.rate = r; this._durations(); }
+  get clipsReady() { return !!this.script && this.clips.length === this.script.scenes.length && this.clips.every(Boolean); }
+
+  _durations() {
+    this.dur = (this.script?.scenes || []).map((sc, i) => (this.clipsReady
+      ? Math.max(3, this.clips[i].duration / this.rate + 0.7, animDuration(sc) / this.rate)
+      : estimateDuration(sc) / this.rate));
+  }
+
+  // Pre-rendered voice audio: array of { samples: Float32Array, rate } or null to go back to the browser voice.
+  setClips(raw) {
+    this._stopClip();
+    if (!raw) { this.clips = []; this._durations(); return; }
+    const ac = this._ensureAudio();
+    this.clips = raw.map((r) => {
+      const b = ac.createBuffer(1, r.samples.length, r.rate);
+      b.copyToChannel(r.samples, 0);
+      return b;
+    });
+    this._durations();
+  }
+
+  _ensureAudio() {
+    if (!this.ac) {
+      this.ac = new (window.AudioContext || window.webkitAudioContext)();
+      this.master = this.ac.createGain();
+      this.dest = this.ac.createMediaStreamDestination();
+      this.master.connect(this.ac.destination);
+      this.master.connect(this.dest);
+    }
+    this.master.gain.value = this.speechOn ? 1 : 0;
+    return this.ac;
+  }
+
+  _startClip() {
+    this._stopClip();
+    if (!this.clipsReady) return;
+    const ac = this._ensureAudio();
+    const s = ac.createBufferSource();
+    s.buffer = this.clips[this.idx];
+    s.playbackRate.value = this.rate;
+    s.connect(this.master);
+    s.start();
+    this.src = s;
+  }
+
+  _stopClip() {
+    if (this.src) { try { this.src.stop(); } catch { /* already stopped */ } this.src = null; }
+  }
+
+  _beginScene() { if (this.clipsReady) this._startClip(); else this.startSpeech(0); }
+
+  setRate(r) { this.rate = r; this._durations(); if (this.src) this.src.playbackRate.value = r; }
   setTheme(name) { this.theme = THEMES[name] || THEMES.Paper; }
   get total() { return this.dur.reduce((a, b) => a + b, 0); }
   get elapsed() { return this.dur.slice(0, this.idx).reduce((a, b) => a + b, 0) + this.t; }
 
   play() {
     if (!this.script) return;
-    if (this.idx >= this.dur.length - 1 && this.t >= this.dur[this.idx]) { this.idx = 0; this.t = 0; this.capIdx = 0; }
+    if (this.idx >= this.dur.length - 1 && this.t >= this.dur[this.idx]) { this.idx = 0; this.t = 0; this.capIdx = 0; this._stopClip(); }
     this.playing = true;
-    this.startSpeech(this.capIdx);
+    if (this.clipsReady) {
+      this._ensureAudio().resume();
+      if (!this.src) this._startClip();
+    } else this.startSpeech(this.capIdx);
     this._emit();
   }
-  pause() { this.playing = false; this.stopSpeech(); this._emit(); }
+  pause() {
+    this.playing = false;
+    if (this.clipsReady && this.ac) this.ac.suspend(); else this.stopSpeech();
+    this._emit();
+  }
   toggle() { this.playing ? this.pause() : this.play(); }
   goto(i) {
     if (!this.script) return;
@@ -316,12 +380,17 @@ export class Player {
     this.t = 0;
     this.capIdx = 0;
     this.stopSpeech();
-    if (this.playing) this.startSpeech(0);
+    this._stopClip();
+    if (this.playing) this._beginScene();
     this._emit();
   }
   next() { this.goto(this.idx + 1); }
   prev() { this.goto(this.t > 1.5 ? this.idx : this.idx - 1); }
-  setSpeech(on) { this.speechOn = on; if (!on) this.stopSpeech(); else if (this.playing) this.startSpeech(this.capIdx); }
+  setSpeech(on) {
+    this.speechOn = on;
+    if (this.master) this.master.gain.value = on ? 1 : 0;
+    if (!on) this.stopSpeech(); else if (this.playing && !this.clipsReady) this.startSpeech(this.capIdx);
+  }
 
   stopSpeech() {
     this.token++;
@@ -331,7 +400,7 @@ export class Player {
 
   startSpeech(from = 0) {
     this.stopSpeech();
-    if (!this.speechOn || !this.playing || !this.script || !("speechSynthesis" in window)) return;
+    if (this.clipsReady || !this.speechOn || !this.playing || !this.script || !("speechSynthesis" in window)) return;
     const sents = sentences(this.script.scenes[this.idx].narration);
     if (!sents.length) return;
     const token = this.token;
@@ -339,7 +408,7 @@ export class Player {
     const speakNext = (i) => {
       if (token !== this.token) return;
       if (i >= sents.length) { this.speaking = false; return; }
-      const u = new SpeechSynthesisUtterance(sents[i]);
+      const u = new SpeechSynthesisUtterance(speakable(sents[i]));
       u.rate = Math.max(0.5, Math.min(2, this.rate));
       if (this.voice) u.voice = this.voice;
       u.onstart = () => { if (token === this.token) this.capIdx = i; };
@@ -361,11 +430,12 @@ export class Player {
           this.idx++;
           this.t = 0;
           this.capIdx = 0;
-          this.startSpeech(0);
+          this._beginScene();
         } else {
           this.t = dur;
           this.playing = false;
           this.stopSpeech();
+          this._stopClip();
           this.hooks.onEnd?.();
         }
       }
@@ -435,13 +505,20 @@ export class Player {
   record(onDone) {
     if (!this.script || this.recorder) return false;
     const stream = this.canvas.captureStream(30);
-    const type = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+    const withVoice = this.clipsReady;
+    const candidates = withVoice ? ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"] : ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+    const type = candidates.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
     if (!type) return false;
+    if (withVoice) {
+      this._ensureAudio().resume();
+      this.master.gain.value = 1;
+      this.dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
+    }
     const chunks = [];
     const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 4_000_000 });
     const wasSpeech = this.speechOn;
     const wasCaps = this.captions;
-    this.speechOn = false;
+    this.speechOn = withVoice;
     this.captions = true;
     rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
     const prevEnd = this.hooks.onEnd;
@@ -453,6 +530,7 @@ export class Player {
       onDone(new Blob(chunks, { type }));
     };
     this.recorder = rec;
+    this._stopClip();
     this.idx = 0; this.t = 0; this.capIdx = 0; this.playing = false;
     rec.start(500);
     this.hooks.onEnd = () => { setTimeout(() => rec.state !== "inactive" && rec.stop(), 600); };
@@ -463,6 +541,8 @@ export class Player {
   destroy() {
     cancelAnimationFrame(this.raf);
     this.stopSpeech();
+    this._stopClip();
+    if (this.ac) { this.ac.close().catch(() => {}); this.ac = null; }
     if (this.recorder && this.recorder.state !== "inactive") this.recorder.stop();
   }
 }
