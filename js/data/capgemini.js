@@ -92,3 +92,96 @@ export const TIPS = [
   "Practise under a timer; skip slow questions and come back.",
   "Do not rely on AI-generated answers or memorise code; start AI topics early, not the night before."
 ];
+
+// Study material specific to this assessment. `t` = study topic id (deep link).
+export const STUDY_MAP = {
+  "Section 1 · AI Literacy": [
+    ["A. AI fundamentals: AI, ML, DL, GenAI, learning types", "ai-fundamentals"],
+    ["B. LLMs: tokens, embeddings, context window, temperature", "ai-llms"],
+    ["C. Prompt engineering and prompt injection", "ai-prompt-engineering"],
+    ["D. RAG: pipeline, chunking, vector search, RAG vs fine-tuning", "ai-rag"],
+    ["E. Agentic AI: agents, tool calling, memory, multi-agent", "ai-agentic"],
+    ["F. Responsible AI: bias, privacy, deepfakes, oversight", "ai-responsible"],
+    ["G. Evaluation and monitoring: groundedness, drift, observability", "ai-evaluation-monitoring"],
+    ["H. AI in software development: Copilot, review, security risks", "ai-in-software-dev"]
+  ],
+  "Section 2 · Debugging (Python first)": [
+    ["Variables, types and casting", "pf-variables"],
+    ["Operators and precedence", "pf-operators"],
+    ["Conditionals and loops", "pf-conditionals-loops"],
+    ["Functions, scope and recursion", "pf-functions-recursion"],
+    ["Mutable vs immutable, default-argument bug", "py-mutability"],
+    ["Lists, tuples, sets, dicts and slicing", "py-collections"],
+    ["Comprehensions and lambda", "py-comprehensions"],
+    ["*args, **kwargs, default arguments", "py-args-kwargs"],
+    ["Exception handling", "py-exceptions"],
+    ["Iterators and generators", "py-iterators-generators"],
+    ["Error types and debugging workflow", "err-types"],
+    ["Arrays, 2D arrays, circular arrays and modulo", "arr-traversal-2d"],
+    ["Two pointers and sliding window", "arr-two-pointer-sliding-window"],
+    ["Strings: palindrome, anagram, frequency", "arr-string-algos"],
+    ["Linked lists", "ll-fundamentals"],
+    ["Stack and queue", "stack-queue"],
+    ["Binary trees and traversals", "tree-traversals"],
+    ["Binary search trees", "bst-ops"],
+    ["Graph traversal (BFS, DFS)", "graph-representation-traversal"],
+    ["Graph cycles and shortest path", "graph-cycles-shortest-path"],
+    ["Dynamic programming basics", "dp-fundamentals"],
+    ["LCS and 0/1 knapsack", "dp-classics"],
+    ["Greedy and heaps", "advanced-greedy-heap"],
+    ["Time and space complexity", "complexity-bigo"]
+  ],
+  "Section 3 · AI-assisted coding": [
+    ["Writing structured prompts for code", "ai-prompt-engineering"],
+    ["Reviewing and validating AI-generated code", "ai-in-software-dev"],
+    ["Complexity: optimise the first answer", "complexity-bigo"],
+    ["Patterns you will be asked to generate", "arr-two-pointer-sliding-window"]
+  ]
+};
+
+// Technical MCQ areas reported for the Exceller technical section. Quick revision sheets.
+export const CHEATSHEETS = [
+  ["Pseudo-code tracing", [
+    "Build a trace table: one column per variable, one row per loop pass. Do not skip rows.",
+    "Check whether the loop bound is inclusive or exclusive, and whether division is integer division.",
+    "Example: a = 5, s = 0; while a > 0: s = s + a; a = a - 2. Passes: (a=5, s=5), (3, 8), (1, 9), then a = -1 stops. Output 9.",
+    "Watch for assignments that happen after the condition check, and for nested loops (inner runs fully per outer pass).",
+    "Recursion: write each call and its return value, then unwind from the base case."
+  ]],
+  ["OOP", [
+    "Encapsulation: data and methods together, hide state behind access modifiers. Abstraction: expose what, hide how. Inheritance: reuse a parent class. Polymorphism: one call, many behaviours.",
+    "Overloading: same name, different parameters, same class, resolved at compile time. Overriding: subclass redefines a parent method with the same signature, resolved at run time.",
+    "Java: == compares references, .equals() compares content. A final class cannot be extended, a final method cannot be overridden.",
+    "Abstract class: can mix implemented and abstract methods, cannot be instantiated. Interface: contract of methods a class implements.",
+    "Constructor: runs on object creation, same name as the class in Java and C++. static members belong to the class, not to objects."
+  ]],
+  ["DBMS and SQL", [
+    "Keys: primary (unique, not null), foreign (references another table), candidate, composite.",
+    "Normalisation: 1NF atomic values, 2NF no partial dependency on part of a key, 3NF no transitive dependency, BCNF every determinant is a key. Purpose: reduce redundancy and anomalies.",
+    "ACID: Atomicity, Consistency, Isolation, Durability.",
+    "WHERE filters rows before grouping; HAVING filters groups after GROUP BY. Example: SELECT dept, AVG(salary) FROM emp GROUP BY dept HAVING AVG(salary) > 50000;",
+    "INNER JOIN keeps matching rows only; LEFT JOIN keeps all left rows with NULL where no match.",
+    "DELETE removes chosen rows (can roll back), TRUNCATE empties the table fast, DROP removes the table itself.",
+    "Employees earning above 50,000: SELECT * FROM employees WHERE salary > 50000;"
+  ]],
+  ["Operating systems", [
+    "Process: program in execution with its own memory. Thread: lightweight unit inside a process, shares its memory.",
+    "Scheduling: FCFS (arrival order), SJF (shortest job first), Round Robin (fixed time slice), Priority.",
+    "Deadlock needs all four: mutual exclusion, hold and wait, no preemption, circular wait.",
+    "Paging splits memory into fixed-size pages; virtual memory lets a program use more than physical RAM; thrashing is excessive swapping.",
+    "Context switch: saving one process's state and loading another's. Mutex and semaphore coordinate access to shared data."
+  ]],
+  ["Computer networks", [
+    "OSI layers: Physical, Data Link, Network, Transport, Session, Presentation, Application. TCP/IP groups them into four.",
+    "TCP: connection-oriented, reliable, ordered. UDP: connectionless, faster, no delivery guarantee (video, DNS).",
+    "HTTP is plain text; HTTPS adds TLS encryption. DNS translates domain names to IP addresses.",
+    "IP address identifies a host on a network; MAC address identifies a network card. Common ports: 80 HTTP, 443 HTTPS, 22 SSH, 53 DNS.",
+    "Client-server: clients send requests, a server responds. REST methods: GET read, POST create, PUT update, DELETE remove. Codes: 200 OK, 201 Created, 400 Bad Request, 401 Unauthorized, 404 Not Found, 500 Server Error."
+  ]],
+  ["Git, SDLC and cloud basics", [
+    "Repository stores project history. Commit saves a snapshot. Branch is an independent line of work. Merge combines branches. Pull request asks to merge with review.",
+    "Version control purpose: track changes, collaborate, roll back, review.",
+    "SDLC phases: requirements, design, development, testing, deployment, maintenance. Agile works in short iterations; waterfall is sequential.",
+    "Cloud: IaaS (raw infrastructure), PaaS (platform to run your code), SaaS (finished software). Cybersecurity basics: least privilege, encryption, validate input, never hard-code secrets."
+  ]]
+];

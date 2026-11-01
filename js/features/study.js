@@ -7,7 +7,8 @@ import { EXTRA } from "../data/topic_extra.js";
 let activeCategory = "All";
 let searchQuery = "";
 
-export function render(root) {
+export function render(root, param) {
+  if (param && TOPICS.some((t) => t.id === param)) return openTopic(root, param);
   renderHTML(root, `
     <h1>Study Material</h1>
     <p class="lead">${TOPICS.length} topics across DSA fundamentals and Capgemini-style AI Literacy, each with a visual where it helps.</p>

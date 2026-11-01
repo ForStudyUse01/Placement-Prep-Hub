@@ -47,7 +47,9 @@ export function refreshProviderBadge() { updateProviderBadge(); }
 
 async function router() {
   let hash = location.hash || "#/dashboard";
+  let param = null;
   let route = ROUTES.find((r) => r.hash === hash);
+  if (!route) { const m = ROUTES.find((r) => hash.startsWith(r.hash + "/")); if (m) { route = m; param = hash.slice(m.hash.length + 1); hash = m.hash; } }
   if (!route) { hash = "#/dashboard"; route = ROUTES[0]; }
   updateActiveNav(hash);
   pageTitle.textContent = route.label;
@@ -55,7 +57,7 @@ async function router() {
   content.replaceChildren();
   content.focus();
   const mod = await route.mod();
-  mod.render(content);
+  mod.render(content, param);
 }
 
 function initTheme() {

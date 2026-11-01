@@ -1,6 +1,6 @@
 import { TOPICS } from "../data/topics.js";
 import { COMPANIES } from "../data/companies_mcq.js";
-import { DEBUG_BANK } from "../data/debugging.js";
+import { PROBLEMS } from "../data/debug/index.js";
 import { get, getTokens } from "../storage.js";
 import { getKey } from "../ai.js";
 import { renderHTML } from "../dom.js";
@@ -10,7 +10,7 @@ const SECTIONS = [
   ["#/visualizer", "Visualizer", "Step through sorting, search, graph and tree algorithms."],
   ["#/ailiteracy", "AI Literacy test", "Timed MCQs for the Capgemini first section."],
   ["#/mcq", "Company tests", "Capgemini, TCS, Infosys, Wipro, Accenture, Cognizant."],
-  ["#/debug", "Debugging arena", "Find the bug in Python, Java, C, C++ and JavaScript."],
+  ["#/debug", "Debugging arena", "Fix 100 buggy programs in Python, C, C++, Java or JavaScript."],
   ["#/aicoding", "AI-assisted coding", "Solve problems with a model, inside a token budget."],
   ["#/promptlab", "Prompt lab", "See real token usage and tighten your prompts."],
   ["#/repocheck", "Repo audit", "Review three weak open-source repos, 100 questions each."],
@@ -19,7 +19,7 @@ const SECTIONS = [
 
 export function render(root) {
   const studyDone = Object.values(get("study:done", {})).filter(Boolean).length;
-  const debugSolved = Object.values(get("debug:solved", {})).filter(Boolean).length;
+  const debugSolved = Object.values(get("debug2:solved", {})).filter(Boolean).length;
   const mcqAttempted = Object.keys(get("mcq:scores", {})).length;
   const hasKey = ["groq", "xai", "gemini", "openrouter"].some((p) => getKey(p));
 
@@ -31,7 +31,7 @@ export function render(root) {
     <div class="grid cols-4">
       <div class="card"><div class="stat"><span class="num">${studyDone}<small style="font-size:16px;color:var(--text-mute)">/${TOPICS.length}</small></span><span class="lbl">Topics read</span></div></div>
       <div class="card"><div class="stat"><span class="num">${mcqAttempted}<small style="font-size:16px;color:var(--text-mute)">/${COMPANIES.length}</small></span><span class="lbl">Company tests</span></div></div>
-      <div class="card"><div class="stat"><span class="num">${debugSolved}<small style="font-size:16px;color:var(--text-mute)">/${DEBUG_BANK.length}</small></span><span class="lbl">Bugs reviewed</span></div></div>
+      <div class="card"><div class="stat"><span class="num">${debugSolved}<small style="font-size:16px;color:var(--text-mute)">/${PROBLEMS.length}</small></span><span class="lbl">Bugs fixed</span></div></div>
       <div class="card"><div class="stat"><span class="num">${getTokens().toLocaleString()}</span><span class="lbl">AI tokens used</span></div></div>
     </div>
 

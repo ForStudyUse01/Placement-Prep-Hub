@@ -31,8 +31,28 @@ else:
 _json.dumps(_out)
 `;
 
+const STDIO_SETUP = ["import sys, io", "sys.stdin = io.StringIO(_stdin)", "sys.stdout = io.StringIO()"].join("\n");
+
 onmessage = async (e) => {
   await ready;
+
+  if (e.data.mode === "stdio") {
+    // Whole-program mode: feed stdin, capture stdout.
+    const ns = py.globals.get("dict")();
+    ns.set("_stdin", e.data.stdin);
+    py.runPython(STDIO_SETUP, { globals: ns });
+    let err = null;
+    try {
+      await py.runPythonAsync(e.data.code, { globals: ns });
+    } catch (ex) {
+      err = String((ex && ex.message) || ex).split("\n").filter(Boolean).slice(-2).join(" | ");
+    }
+    const out = py.runPython("sys.stdout.getvalue()", { globals: ns });
+    py.runPython("sys.stdout = sys.__stdout__", { globals: ns });
+    postMessage({ type: "stdio", out, err });
+    return;
+  }
+
   const { code, fn, cases, kind } = e.data;
   try {
     const ns = py.globals.get("dict")();
