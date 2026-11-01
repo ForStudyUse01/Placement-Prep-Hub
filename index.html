@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Placement Prep Hub</title>
+<meta name="description" content="All-in-one campus placement preparation: study material, MCQ tests, debugging arena, AI-assisted coding, prompt lab, and GitHub repo audits.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-text">Placement<br>Prep Hub<small>Campus drive workbook</small></span>
+    </div>
+    <nav id="nav" class="nav"></nav>
+    <div class="sidebar-footer">
+      <button id="themeToggle" class="btn-ghost" type="button">Theme</button>
+      <div class="token-pill" id="globalTokenPill" title="AI tokens used this session">0 tok used</div>
+    </div>
+  </aside>
+
+  <header class="topbar">
+    <button id="menuBtn" class="btn-ghost icon-btn" aria-label="Toggle menu">☰</button>
+    <div class="topbar-title" id="pageTitle">Dashboard</div>
+    <div class="topbar-actions">
+      <span class="badge-live" id="providerBadge">No AI key set</span>
+    </div>
+  </header>
+
+  <main id="content" class="content" tabindex="-1"></main>
+</div>
+
+<template id="tpl-card"></template>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
