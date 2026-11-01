@@ -1,6 +1,6 @@
 import { PROVIDERS, getKey, setKey, getPrefs, setPrefs, getModels, fetchModels } from "../ai.js";
 import { renderHTML, escapeHtml } from "../dom.js";
-import { getTokens, set } from "../storage.js";
+import { getTokens, getSessionTokens, getUsageLog, resetTokens } from "../storage.js";
 
 export function render(root) {
   const prefs = getPrefs();
@@ -45,7 +45,8 @@ export function render(root) {
 
     <h2 style="margin-top:24px">3. Usage</h2>
     <div class="card">
-      <div class="stat"><span class="num">${getTokens().toLocaleString()}</span><span class="lbl">Total AI tokens used this browser, all-time</span></div>
+      <div class="grid cols-2" style="border:none"><div class="stat"><span class="num">${getSessionTokens().toLocaleString()}</span><span class="lbl">Tokens this visit</span></div><div class="stat"><span class="num">${getTokens().toLocaleString()}</span><span class="lbl">Tokens all-time (this browser)</span></div></div>
+      <div class="scroll-x" style="margin-top:14px"><table class="vtable" style="width:100%"><tr><th>When</th><th>Feature</th><th>Model</th><th>In</th><th>Out</th><th>Total</th></tr>${getUsageLog().slice(-10).reverse().map((e) => `<tr><td>${new Date(e.t).toLocaleTimeString()}</td><td>${escapeHtml(e.feature)}</td><td>${escapeHtml(e.model)}${e.estimated ? " (est.)" : ""}</td><td>${e.prompt}</td><td>${e.completion}</td><td>${e.total}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No AI calls yet.</td></tr>`}</table></div>
       <button class="btn secondary" id="resetTokensBtn" style="margin-top:10px">Reset token counter</button>
     </div>
   `);
@@ -132,8 +133,7 @@ export function render(root) {
   });
 
   root.querySelector("#resetTokensBtn").addEventListener("click", () => {
-    set("tokens:total", 0);
-    import("../app.js").then((m) => m.refreshTokenPill?.());
+    resetTokens();
     render(root);
   });
 }

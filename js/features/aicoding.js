@@ -1,8 +1,8 @@
 import { CODING_PROBLEMS, fmtCase } from "../data/coding_problems.js";
-import { PROVIDERS, getPrefs, callAI } from "../ai.js";
+import { PROVIDERS, getPrefs, callAI, estimateTokens } from "../ai.js";
 import { runTests, extractCode } from "../runner.js";
 import { renderHTML, escapeHtml as esc } from "../dom.js";
-import { get, set, addTokens } from "../storage.js";
+import { get, set } from "../storage.js";
 
 let state = null; // { problem, language, budget, used, messages, code, result, attempts }
 
@@ -52,7 +52,7 @@ function paintRound(root) {
       <table style="width:100%;font-size:13px"><tr style="text-align:left"><th>Call</th><th>Expected</th></tr>${problem.cases.map((c) => { const [call, exp] = fmtCase(problem, c, language); return `<tr><td style="padding:3px 8px 3px 0"><code>${esc(call)}</code></td><td><code>${esc(exp)}</code></td></tr>`; }).join("")}</table>
     </div>
     <div class="card" style="margin-top:14px">
-      <div class="flex between"><span class="muted" style="font-size:12px;font-family:var(--mono)">tokens ${used} / ${budget}</span><span class="muted" style="font-size:12px;font-family:var(--mono)">attempts ${state.attempts}</span></div>
+      <div class="flex between"><span class="muted" style="font-size:12px;font-family:var(--mono)">tokens used ${used} / ${budget} (${Math.max(0, budget - used)} left)${state.last ? ` · last call: ${state.last.prompt} in, ${state.last.completion + (state.last.reasoning || 0)} out` : ""}</span><span class="muted" style="font-size:12px;font-family:var(--mono)">attempts ${state.attempts}</span></div>
       <div class="progress-bar" style="margin:8px 0 14px"><div style="width:${pct}%;${pct >= 100 ? "background:var(--danger)" : ""}"></div></div>
       <div id="chatLog"></div>
       <div class="field" style="margin-top:12px"><label>Your prompt to the AI</label>
@@ -143,12 +143,22 @@ Language: ${language}. The solution MUST define exactly: ${sig}
 Example tests: ${problem.cases.map((c) => fmtCase(problem, c, language).join(" -> ")).join("; ")}.
 Reply with ONE fenced code block in ${language}, then at most 3 sentences on the approach and time/space complexity.`;
 
+  const history = [{ role: "system", content: sys }, ...state.messages.map((m) => ({ role: m.role, content: m.content }))];
+  const remaining = state.budget - state.used;
+  const rawPrompt = estimateTokens(history.map((m) => m.content).join(" "));
+  const estPrompt = Math.ceil(rawPrompt * (state.ratio || 1));
+  if (remaining < estPrompt + 60) {
+    state.messages.pop();
+    state.note = `Budget too low for another call: about ${estPrompt} tokens are needed just to send the conversation so far, ${Math.max(0, remaining)} left. Start a new round or raise the budget.`;
+    paintRound(root);
+    return;
+  }
   try {
-    const result = await callAI({ messages: [{ role: "system", content: sys }, ...state.messages.map((m) => ({ role: m.role, content: m.content }))], maxTokens: 900 });
+    const result = await callAI({ messages: history, maxTokens: Math.max(120, Math.min(900, remaining - estPrompt)), feature: "coding-round" });
     state.used += result.usage.total;
-    addTokens(result.usage.total);
-    import("../app.js").then((m) => m.refreshTokenPill?.());
-    state.messages.push({ role: "assistant", content: result.text, meta: `${result.provider}/${result.model}${result.autoSwitched ? ` (auto-switched ${result.autoSwitched})` : ""}${result.usedBackup ? " (backup used)" : ""}` });
+    state.last = result.usage;
+    if (!result.usage.estimated && rawPrompt) state.ratio = result.usage.prompt / rawPrompt;
+    state.messages.push({ role: "assistant", content: result.text, meta: `${result.provider}/${result.model} · prompt ${result.usage.prompt} + reply ${result.usage.completion + (result.usage.reasoning || 0)} = ${result.usage.total} tokens${result.usage.estimated ? " (estimated)" : ""}${result.autoSwitched ? ` (auto-switched ${result.autoSwitched})` : ""}${result.usedBackup ? " (backup used)" : ""}` });
     state.note = result.usedBackup ? `Primary failed (${result.primaryError}). Backup used.` : "Reply received. Running tests…";
     const code = extractCode(result.text, language);
     if (code) { state.code = code; paintRound(root); await check(root); return; }

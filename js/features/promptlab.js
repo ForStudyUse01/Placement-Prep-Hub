@@ -1,6 +1,5 @@
 import { callAI, estimateTokens, getPrefs, PROVIDERS } from "../ai.js";
 import { renderHTML, escapeHtml } from "../dom.js";
-import { addTokens } from "../storage.js";
 
 export function render(root) {
   const prefs = getPrefs();
@@ -49,31 +48,35 @@ REWRITE:
 Keep the whole reply under 180 words.`;
 
   try {
-    const result = await callAI({ messages: [{ role: "system", content: sys }, { role: "user", content: text }], maxTokens: 400 });
-    addTokens(result.usage.total);
-    import("../app.js").then((m) => m.refreshTokenPill?.());
+    const result = await callAI({ messages: [{ role: "system", content: sys }, { role: "user", content: text }], maxTokens: 500, feature: "prompt-lab" });
 
     const { issues, rewrite } = splitResponse(result.text);
-    const originalTokens = estimateTokens(text);
-    const rewriteTokens = estimateTokens(rewrite || "");
-    const savedPct = rewriteTokens && originalTokens ? Math.max(0, Math.round((1 - rewriteTokens / originalTokens) * 100)) : 0;
+    // The API's prompt count includes OUR coaching instructions, not just your prompt.
+    // Calibrate our estimator to the model's real count, then size your prompt and the rewrite with it.
+    const rawAll = estimateTokens(sys) + estimateTokens(text);
+    const ratio = result.usage.estimated || !rawAll ? 1 : result.usage.prompt / rawAll;
+    const yours = Math.max(1, Math.round(estimateTokens(text) * ratio));
+    const rewritten = Math.round(estimateTokens(rewrite || "") * ratio);
+    const delta = yours - rewritten;
+    const savedPct = rewritten && yours ? Math.round((delta / yours) * 100) : 0;
+    const out = result.usage.completion + (result.usage.reasoning || 0);
 
     renderHTML(root.querySelector("#resultArea"), `
       <div class="grid cols-3">
-        <div class="card"><div class="stat"><span class="num">${result.usage.prompt}</span><span class="lbl">Prompt tokens (actual, from API)</span></div></div>
-        <div class="card"><div class="stat"><span class="num">${result.usage.completion}</span><span class="lbl">Completion tokens for this critique</span></div></div>
-        <div class="card"><div class="stat"><span class="num">${savedPct}%</span><span class="lbl">Estimated savings if you use the rewrite</span></div></div>
+        <div class="card"><div class="stat"><span class="num">~${yours}</span><span class="lbl">Your prompt (estimate calibrated to the model's real count)</span></div></div>
+        <div class="card"><div class="stat"><span class="num">~${rewritten}</span><span class="lbl">Rewrite · ${delta > 0 ? `saves ~${savedPct}%` : `adds ~${-delta} tokens for clarity`}</span></div></div>
+        <div class="card"><div class="stat"><span class="num">${result.usage.total}</span><span class="lbl">Actual tokens this analysis cost (${result.usage.prompt} in + ${out} out), already counted in your total</span></div></div>
       </div>
       <div class="card" style="margin-top:14px">
         <h2>Where you're losing tokens</h2>
         <div class="topic-body">${issues}</div>
       </div>
       <div class="card" style="margin-top:14px">
-        <h2>Tightened rewrite (~${rewriteTokens} tokens vs ~${originalTokens} original)</h2>
+        <h2>Tightened rewrite</h2>
         <pre>${escapeHtml(rewrite)}</pre>
         <button class="btn secondary" id="useRewriteBtn">Use this rewrite</button>
       </div>
-      <p class="muted" style="font-size:11px;margin-top:8px">Model: ${escapeHtml(result.provider)}/${escapeHtml(result.model)}${result.usage.estimated ? " · token counts estimated (provider gave no usage field)" : " · token counts are the real numbers returned by the API"}</p>
+      <p class="muted" style="font-size:12px;margin-top:8px">Model: ${escapeHtml(result.provider)}/${escapeHtml(result.model)}. ${result.usage.estimated ? "Provider returned no usage, so every number here is an estimate." : "The cost card is the exact count from the API. Your-prompt and rewrite sizes are estimates, scaled so they match the model's real total."}${result.usage.reasoning ? ` Includes ${result.usage.reasoning} hidden reasoning tokens.` : ""}</p>
     `);
     root.querySelector("#useRewriteBtn")?.addEventListener("click", () => {
       promptBox.value = rewrite;

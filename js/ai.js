@@ -3,7 +3,7 @@
 // browser's localStorage and are sent straight to the provider, never to a
 // third party. Works on static hosting (GitHub Pages) because there is no
 // backend: every call is a direct fetch() from the browser to the provider.
-import { get, set } from "./storage.js";
+import { get, set, recordUsage } from "./storage.js";
 
 export const PROVIDERS = {
   groq: {
@@ -115,9 +115,14 @@ export function setPrefs(p) {
   set("ai:prefs", p);
 }
 
-// Rough fallback token estimate when a provider gives no usage field (~4 chars/token).
+// Heuristic token estimate (used only to pre-check budgets and when a provider
+// returns no usage). Words ~ len/4.2, numbers/punctuation ~ 1 each. Real counts
+// always come from the API response when available.
 export function estimateTokens(str) {
-  return Math.ceil((str || "").length / 4);
+  const parts = (str || "").match(/[A-Za-z]+|\d+|[^\sA-Za-z\d]/g) || [];
+  let n = 0;
+  for (const p of parts) n += /^[A-Za-z]+$/.test(p) ? Math.max(1, Math.ceil(p.length / 4.2)) : /^\d+$/.test(p) ? Math.ceil(p.length / 3) : 1;
+  return n;
 }
 
 const LIST_URLS = {
@@ -207,13 +212,14 @@ async function callOneRaw(providerKey, model, messages, maxTokens) {
  * Calls the primary provider/model; on any failure (bad key, rate limit,
  * network) automatically retries once against the backup provider/model.
  */
-export async function callAI({ messages, maxTokens = 600, prefs = null }) {
+export async function callAI({ messages, maxTokens = 600, prefs = null, feature = "ai" }) {
   const p = prefs || getPrefs();
+  const log = (r) => { recordUsage({ feature, provider: r.provider, model: r.model, prompt: r.usage.prompt, completion: r.usage.completion + (r.usage.reasoning || 0), total: r.usage.total, estimated: !!r.usage.estimated }); return r; };
   try {
-    return await callOne(p.primaryProvider, p.primaryModel, messages, maxTokens);
+    return log(await callOne(p.primaryProvider, p.primaryModel, messages, maxTokens));
   } catch (primaryErr) {
     try {
-      const result = await callOne(p.backupProvider, p.backupModel, messages, maxTokens);
+      const result = log(await callOne(p.backupProvider, p.backupModel, messages, maxTokens));
       result.usedBackup = true;
       result.primaryError = primaryErr.message;
       return result;

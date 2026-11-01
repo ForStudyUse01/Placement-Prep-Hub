@@ -1,5 +1,5 @@
 import { renderHTML } from "./dom.js";
-import { get, set, getTokens } from "./storage.js";
+import { get, set, getTokens, getSessionTokens } from "./storage.js";
 import { getKey } from "./ai.js";
 
 const ROUTES = [
@@ -34,7 +34,7 @@ function updateActiveNav(hash) {
 }
 
 function updateTokenPill() {
-  globalTokenPill.textContent = `${getTokens().toLocaleString()} tok used`;
+  globalTokenPill.textContent = `${getSessionTokens().toLocaleString()} tokens this visit · ${getTokens().toLocaleString()} all-time`;
 }
 export function refreshTokenPill() { updateTokenPill(); }
 
@@ -75,6 +75,7 @@ menuBtn.addEventListener("click", () => sidebar.classList.toggle("open"));
 
 window.addEventListener("hashchange", router);
 window.addEventListener("storage", () => { updateTokenPill(); updateProviderBadge(); });
+window.addEventListener("tokens-changed", updateTokenPill);
 
 paintNav();
 initTheme();

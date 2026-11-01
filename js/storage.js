@@ -23,12 +23,26 @@ export function remove(key) {
   try { localStorage.removeItem(NS + key); } catch { /* noop */ }
 }
 
-export function addTokens(n) {
-  const total = get("tokens:total", 0) + (Number(n) || 0);
-  set("tokens:total", total);
-  return total;
+// ---- token ledger: every real AI call is recorded once, in ai.js ----
+let sessionTokens = 0; // resets on page load
+
+export function recordUsage(entry) {
+  const total = Number(entry.total) || 0;
+  sessionTokens += total;
+  set("tokens:total", get("tokens:total", 0) + total);
+  const log = get("tokens:log", []);
+  log.push({ ...entry, t: Date.now() });
+  set("tokens:log", log.slice(-100));
+  window.dispatchEvent(new Event("tokens-changed"));
 }
 
-export function getTokens() {
-  return get("tokens:total", 0);
+export const getTokens = () => get("tokens:total", 0);
+export const getSessionTokens = () => sessionTokens;
+export const getUsageLog = () => get("tokens:log", []);
+
+export function resetTokens() {
+  sessionTokens = 0;
+  set("tokens:total", 0);
+  set("tokens:log", []);
+  window.dispatchEvent(new Event("tokens-changed"));
 }
