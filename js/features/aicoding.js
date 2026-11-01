@@ -1,46 +1,38 @@
-import { CODING_PROBLEMS } from "../data/coding_problems.js";
+import { CODING_PROBLEMS, fmtCase } from "../data/coding_problems.js";
 import { PROVIDERS, getPrefs, callAI } from "../ai.js";
-import { renderHTML, escapeHtml } from "../dom.js";
+import { runTests, extractCode } from "../runner.js";
+import { renderHTML, escapeHtml as esc } from "../dom.js";
 import { get, set, addTokens } from "../storage.js";
 
-let state = null; // { problem, provider, model, budget, used, messages:[], language }
+let state = null; // { problem, language, budget, used, messages, code, result, attempts }
 
 export function render(root) {
   const prefs = getPrefs();
+  const solved = get("aicode:solved", {});
   renderHTML(root, `
+    <div class="kicker">Capgemini Exceller · Section 3</div>
     <h1>AI-Assisted Coding Round</h1>
-    <p class="lead">Pick a problem, pick which free-tier model to use, set a token budget, then prompt the model like you would in a real round. Primary model fails or runs out of quota → it automatically falls back to your backup model.</p>
+    <p class="lead">Write a prompt, the model answers with code, and your code is run against the test cases right here in the browser. Visible tests show expected vs actual; hidden tests catch hard-coded answers. If the primary model fails, your backup model is used automatically.</p>
     <div class="card">
-      <div class="grid cols-3">
-        <div class="field">
-          <label>Problem</label>
-          <select id="problemSelect"></select>
-        </div>
-        <div class="field">
-          <label>Language</label>
-          <select id="langSelect">
-            <option>Python</option><option>JavaScript</option><option>Java</option><option>C++</option><option>C</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>Token budget for this round</label>
-          <input type="number" id="budgetInput" value="${prefs.budget}" min="200" step="100"/>
-        </div>
+      <div class="grid cols-3" style="border:none">
+        <div class="field" style="border:none;padding-right:12px"><label>Problem</label><select id="problemSelect"></select></div>
+        <div class="field" style="border:none;padding-right:12px"><label>Language (auto-checked)</label><select id="langSelect"><option>Python</option><option>JavaScript</option></select></div>
+        <div class="field" style="border:none"><label>Token budget</label><input type="number" id="budgetInput" value="${prefs.budget}" min="200" step="100"/></div>
       </div>
-      <p class="muted" style="font-size:12px">Using primary: <b>${escapeHtml(PROVIDERS[prefs.primaryProvider].label)}</b> (${escapeHtml(prefs.primaryModel)}) · backup: <b>${escapeHtml(PROVIDERS[prefs.backupProvider].label)}</b> (${escapeHtml(prefs.backupModel)}). Change these in Settings.</p>
-      <button class="btn" id="startBtn">Start round →</button>
+      <p class="muted" style="font-size:13px">Primary: <b>${esc(PROVIDERS[prefs.primaryProvider].label)}</b> (${esc(prefs.primaryModel)}). Backup: <b>${esc(PROVIDERS[prefs.backupProvider].label)}</b> (${esc(prefs.backupModel)}). Change in Settings. Java, C and C++ cannot be executed in a browser, so only Python and JavaScript are auto-checked.</p>
+      <button class="btn" id="startBtn">Start round</button>
     </div>
-    <div id="roundArea" style="margin-top:20px"></div>
+    <div id="roundArea" style="margin-top:24px"></div>
   `);
-
-  const problemSelect = root.querySelector("#problemSelect");
-  renderHTML(problemSelect, CODING_PROBLEMS.map((p) => `<option value="${p.id}">${escapeHtml(p.title)} — ${escapeHtml(p.difficulty)}</option>`).join(""));
-
+  const sel = root.querySelector("#problemSelect");
+  renderHTML(sel, CODING_PROBLEMS.map((p) => `<option value="${p.id}">${esc(p.title)} (${esc(p.difficulty)})${solved[p.id] ? " ✓" : ""}</option>`).join(""));
   root.querySelector("#startBtn").addEventListener("click", () => {
-    const problem = CODING_PROBLEMS.find((p) => p.id === problemSelect.value);
-    const language = root.querySelector("#langSelect").value;
-    const budget = Number(root.querySelector("#budgetInput").value) || 2000;
-    state = { problem, language, budget, used: 0, messages: [] };
+    state = {
+      problem: CODING_PROBLEMS.find((p) => p.id === sel.value),
+      language: root.querySelector("#langSelect").value,
+      budget: Number(root.querySelector("#budgetInput").value) || 2000,
+      used: 0, messages: [], code: "", result: null, attempts: 0, running: false, note: ""
+    };
     paintRound(root);
   });
 }
@@ -48,45 +40,88 @@ export function render(root) {
 function paintRound(root) {
   const area = root.querySelector("#roundArea");
   const { problem, language, budget, used } = state;
+  const sig = language === "Python" ? problem.py : problem.js;
   const pct = Math.min(100, Math.round((used / budget) * 100));
   renderHTML(area, `
     <div class="card">
-      <h2>${escapeHtml(problem.title)} <span class="tag">${escapeHtml(problem.concept)}</span> <span class="tag warn">${escapeHtml(problem.difficulty)}</span></h2>
-      <p>${escapeHtml(problem.statement)}</p>
-      <p class="muted" style="font-size:13px"><b>Constraints:</b> ${escapeHtml(problem.constraints)}</p>
-      <h2 style="font-size:14px;margin-top:12px">Test cases</h2>
-      <table style="width:100%;font-size:13px;border-collapse:collapse">${problem.tests.map((t) => `<tr><td style="padding:3px 8px 3px 0"><code>${escapeHtml(t.input)}</code></td><td>→ <code>${escapeHtml(t.expected)}</code></td></tr>`).join("")}</table>
-      <p class="muted" style="font-size:13px">Target language: <b>${escapeHtml(language)}</b></p>
+      <h2>${esc(problem.title)} <span class="tag">${esc(problem.concept)}</span> <span class="tag warn">${esc(problem.difficulty)}</span></h2>
+      <p>${esc(problem.statement)}</p>
+      <p class="muted" style="font-size:13px"><b>Constraints:</b> ${esc(problem.constraints)}</p>
+      <p style="font-size:13px"><b>Your code must define:</b> <code>${esc(sig)}</code></p>
+      <label style="margin-top:12px">Visible test cases (${problem.hidden.length} more are hidden)</label>
+      <table style="width:100%;font-size:13px"><tr style="text-align:left"><th>Call</th><th>Expected</th></tr>${problem.cases.map((c) => { const [call, exp] = fmtCase(problem, c, language); return `<tr><td style="padding:3px 8px 3px 0"><code>${esc(call)}</code></td><td><code>${esc(exp)}</code></td></tr>`; }).join("")}</table>
     </div>
     <div class="card" style="margin-top:14px">
-      <div class="flex between">
-        <span class="muted" style="font-size:12px">Token budget used: ${used} / ${budget}</span>
-        <span class="muted" style="font-size:12px">${budget - used <= 0 ? "Budget exhausted" : `${budget - used} left`}</span>
-      </div>
-      <div class="progress-bar" style="margin:8px 0 14px"><div style="width:${pct}%;${pct>=100?'background:var(--danger)':''}"></div></div>
+      <div class="flex between"><span class="muted" style="font-size:12px;font-family:var(--mono)">tokens ${used} / ${budget}</span><span class="muted" style="font-size:12px;font-family:var(--mono)">attempts ${state.attempts}</span></div>
+      <div class="progress-bar" style="margin:8px 0 14px"><div style="width:${pct}%;${pct >= 100 ? "background:var(--danger)" : ""}"></div></div>
       <div id="chatLog"></div>
-      <div class="field" style="margin-top:12px">
-        <label>Your prompt to the AI</label>
-        <textarea id="promptInput" rows="4" placeholder="e.g. Write an O(n) ${escapeHtml(language)} solution for this problem using a hash map, with input/output examples."></textarea>
-      </div>
-      <button class="btn" id="sendBtn" ${budget - used <= 0 ? "disabled" : ""}>Send to AI</button>
+      <div class="field" style="margin-top:12px"><label>Your prompt to the AI</label>
+        <textarea id="promptInput" rows="4" placeholder="Example: Write ${esc(language)} code defining ${esc(sig.split("(")[0])} for this problem. Use a hash map, target O(n), handle empty input. Return only one code block."></textarea></div>
+      <button class="btn" id="sendBtn" ${used >= budget || state.running ? "disabled" : ""}>Send to AI</button>
       <button class="btn secondary" id="resetBtn">New round</button>
-      <span class="muted" id="aiStatus" style="margin-left:10px;font-size:12px"></span>
+      <span class="muted" id="aiStatus" style="margin-left:10px;font-size:13px">${esc(state.note)}</span>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <label>Code under test (filled from the AI's reply; edit it if you spot a bug)</label>
+      <textarea id="codeBox" rows="12" spellcheck="false"></textarea>
+      <div class="flex gap" style="margin-top:10px"><button class="btn success" id="runBtn" ${state.running ? "disabled" : ""}>${state.running ? "Running…" : "Run tests"}</button><span class="muted" style="font-size:12px">Runs in an isolated worker in your browser. ${language === "Python" ? "First Python run downloads the runtime (about 10 MB)." : ""}</span></div>
+      <div id="verdict" style="margin-top:14px"></div>
     </div>
   `);
-  paintChatLog(area);
+  area.querySelector("#codeBox").value = state.code;
+  paintChat(area);
+  paintVerdict(area);
+  area.querySelector("#codeBox").addEventListener("input", (e) => (state.code = e.target.value));
   area.querySelector("#resetBtn").addEventListener("click", () => { state = null; render(root); });
   area.querySelector("#sendBtn").addEventListener("click", () => sendPrompt(root));
+  area.querySelector("#runBtn").addEventListener("click", () => check(root));
 }
 
-function paintChatLog(area) {
-  const log = area.querySelector("#chatLog");
-  renderHTML(log, state.messages.map((m) => `
-    <div class="card" style="margin-bottom:10px;background:${m.role === "user" ? "var(--panel-2)" : "var(--bg-soft)"}">
-      <p class="muted" style="font-size:11px;margin:0 0 6px">${m.role === "user" ? "You" : `AI (${escapeHtml(m.meta || "")})`}</p>
-      <pre style="white-space:pre-wrap">${escapeHtml(m.content)}</pre>
-    </div>
-  `).join("") || `<p class="muted">No messages yet — write your first prompt below. Be specific: language, approach, complexity target, and edge cases.</p>`);
+function paintChat(area) {
+  renderHTML(area.querySelector("#chatLog"), state.messages.map((m) => `
+    <div class="card" style="margin-bottom:8px;background:${m.role === "user" ? "var(--panel-2)" : "var(--bg-soft)"}">
+      <p class="muted" style="font-size:11px;margin:0 0 6px;font-family:var(--mono)">${m.role === "user" ? "You" : `AI · ${esc(m.meta || "")}`}</p>
+      <pre style="white-space:pre-wrap;margin:0"></pre>
+    </div>`).join("") || `<p class="muted">No messages yet. Be specific: language, approach, complexity, edge cases, and ask for one code block.</p>`);
+  area.querySelectorAll("#chatLog pre").forEach((el, i) => (el.textContent = state.messages[i].content));
+}
+
+function paintVerdict(area) {
+  const box = area.querySelector("#verdict");
+  const r = state.result;
+  if (!r) { renderHTML(box, `<p class="muted" style="margin:0">No result yet.</p>`); return; }
+  if (r.error) { renderHTML(box, `<div class="vout" style="border-color:var(--danger)"></div>`); box.firstElementChild.textContent = r.error; return; }
+  const ok = r.passed === r.total;
+  renderHTML(box, `
+    <div class="flex gap" style="margin-bottom:10px"><span class="tag ${ok ? "good" : "danger"}" style="font-size:12px;padding:4px 10px">${ok ? "Correct: all tests passed" : "Not correct yet"}</span><b>${r.passed} / ${r.total} passed</b></div>
+    <table class="vtable" style="width:100%;text-align:left"><tr><th>Test</th><th>Expected</th><th>Got</th><th></th></tr>${r.rows.map((x, i) => {
+      const p = state.problem;
+      const [call, exp] = x.hidden ? [`Hidden test ${i - p.cases.length + 1}`, "hidden"] : fmtCase(p, { args: x.args, expected: x.expected }, state.language);
+      let got = x.err ? x.err : x.got === undefined ? "" : x.got;
+      if (!x.err && state.language === "Python") got = got.replace(/\bnull\b/g, "None").replace(/\btrue\b/g, "True").replace(/\bfalse\b/g, "False");
+      return `<tr><td style="text-align:left"><code>${esc(call)}</code></td><td style="text-align:left">${esc(exp)}</td><td style="text-align:left">${x.hidden && !x.pass ? "(wrong or error)" : x.hidden ? "hidden" : esc(got)}</td><td style="color:var(--${x.pass ? "accent-2" : "danger"});font-weight:600">${x.pass ? "PASS" : "FAIL"}</td></tr>`;
+    }).join("")}</table>
+    <p class="muted" style="font-size:13px;margin:10px 0 0">${ok ? "Before submitting in a real round, also check time complexity against the constraints." : "Read the failing case, then tell the AI the exact input, the expected output and what you got."}</p>`);
+}
+
+async function check(root) {
+  if (!state.code.trim()) { state.result = { error: "No code to test. Ask the AI for code first, or paste your own." }; paintRound(root); return; }
+  state.running = true;
+  state.result = null;
+  state.attempts += 1;
+  paintRound(root);
+  try {
+    state.result = await runTests({ lang: state.language, code: state.code, problem: state.problem });
+    if (state.result.passed === state.result.total) {
+      const s = get("aicode:solved", {});
+      s[state.problem.id] = { lang: state.language, tokens: state.used, attempts: state.attempts };
+      set("aicode:solved", s);
+    }
+  } catch (err) {
+    state.result = { error: err.message };
+  }
+  state.running = false;
+  paintRound(root);
 }
 
 async function sendPrompt(root) {
@@ -94,40 +129,33 @@ async function sendPrompt(root) {
   const input = area.querySelector("#promptInput");
   const text = input.value.trim();
   if (!text) return;
-  const statusEl = area.querySelector("#aiStatus");
-  const sendBtn = area.querySelector("#sendBtn");
-  sendBtn.disabled = true;
-  statusEl.textContent = "Calling model…";
-
+  area.querySelector("#sendBtn").disabled = true;
+  area.querySelector("#aiStatus").textContent = "Calling model…";
   state.messages.push({ role: "user", content: text });
-  input.value = "";
-  paintChatLog(area);
+  paintChat(area);
 
-  const sys = `You are an AI pair-programming assistant helping a candidate practice for a campus placement AI-assisted coding round.
-Problem: ${state.problem.title} — ${state.problem.statement}
-Constraints: ${state.problem.constraints}
-Sample tests (input → expected): ${state.problem.tests.map((t) => `${t.input} → ${t.expected}`).join("; ")}.
-Target language: ${state.language}.
-Give a correct, reasonably optimized solution with a one-paragraph explanation of the approach and its time/space complexity. Keep the whole reply under 300 words.`;
+  const { problem, language } = state;
+  const sig = language === "Python" ? problem.py : problem.js;
+  const sys = `You are an AI pair-programming assistant in a campus coding round.
+Problem: ${problem.title}. ${problem.statement}
+Constraints: ${problem.constraints}
+Language: ${language}. The solution MUST define exactly: ${sig}
+Example tests: ${problem.cases.map((c) => fmtCase(problem, c, language).join(" -> ")).join("; ")}.
+Reply with ONE fenced code block in ${language}, then at most 3 sentences on the approach and time/space complexity.`;
 
   try {
-    const result = await callAI({
-      messages: [{ role: "system", content: sys }, ...state.messages.map((m) => ({ role: m.role, content: m.content }))],
-      maxTokens: 700
-    });
+    const result = await callAI({ messages: [{ role: "system", content: sys }, ...state.messages.map((m) => ({ role: m.role, content: m.content }))], maxTokens: 900 });
     state.used += result.usage.total;
     addTokens(result.usage.total);
     import("../app.js").then((m) => m.refreshTokenPill?.());
-    state.messages.push({
-      role: "assistant",
-      content: result.text,
-      meta: `${result.provider}/${result.model}${result.autoSwitched ? " (auto-switched " + result.autoSwitched + ")" : ""}${result.usedBackup ? " — backup used" : ""}${result.usage.estimated ? ", ~estimated tokens" : ""}`
-    });
-    statusEl.textContent = result.usedBackup ? `Primary failed (${result.primaryError}) — used backup instead.` : "Done.";
+    state.messages.push({ role: "assistant", content: result.text, meta: `${result.provider}/${result.model}${result.autoSwitched ? ` (auto-switched ${result.autoSwitched})` : ""}${result.usedBackup ? " (backup used)" : ""}` });
+    state.note = result.usedBackup ? `Primary failed (${result.primaryError}). Backup used.` : "Reply received. Running tests…";
+    const code = extractCode(result.text, language);
+    if (code) { state.code = code; paintRound(root); await check(root); return; }
+    state.note = "The reply had no code block. Ask for one code block.";
   } catch (err) {
     state.messages.push({ role: "assistant", content: `Error: ${err.message}`, meta: "error" });
-    statusEl.textContent = "Both primary and backup failed — check your API keys in Settings.";
+    state.note = "Both models failed. Check keys in Settings.";
   }
-  sendBtn.disabled = state.used >= state.budget;
   paintRound(root);
 }
