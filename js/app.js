@@ -6,6 +6,7 @@ const ROUTES = [
   { hash: "#/dashboard", icon: "01", label: "Dashboard", mod: () => import("./features/dashboard.js") },
   { hash: "#/study", icon: "02", label: "Study Material", mod: () => import("./features/study.js") },
   { hash: "#/visualizer", icon: "03", label: "Visualizer", mod: () => import("./features/visualizer.js") },
+  { hash: "#/videolab", icon: "", label: "Video Explainer", mod: () => import("./features/videolab.js") },
   { hash: "#/ailiteracy", icon: "04", label: "AI Literacy Test", mod: () => import("./features/ailiteracy.js") },
   { hash: "#/mcq", icon: "05", label: "Company MCQ Tests", mod: () => import("./features/mcq.js") },
   { hash: "#/debug", icon: "06", label: "Debugging Arena", mod: () => import("./features/debug.js") },
@@ -26,7 +27,7 @@ const globalTokenPill = document.getElementById("globalTokenPill");
 const providerBadge = document.getElementById("providerBadge");
 
 function paintNav() {
-  renderHTML(nav, ROUTES.map((r) => `<a href="${r.hash}" data-hash="${r.hash}"><span class="nav-icon">${r.icon}</span>${r.label}</a>`).join(""));
+  renderHTML(nav, ROUTES.map((r, i) => `<a href="${r.hash}" data-hash="${r.hash}"><span class="nav-icon">${String(i + 1).padStart(2, "0")}</span>${r.label}</a>`).join(""));
 }
 
 function updateActiveNav(hash) {
@@ -45,6 +46,8 @@ function updateProviderBadge() {
 }
 export function refreshProviderBadge() { updateProviderBadge(); }
 
+let currentMod = null;
+
 async function router() {
   let hash = location.hash || "#/dashboard";
   let param = null;
@@ -54,9 +57,11 @@ async function router() {
   updateActiveNav(hash);
   pageTitle.textContent = route.label;
   sidebar.classList.remove("open");
+  if (currentMod && currentMod.unmount) currentMod.unmount();
   content.replaceChildren();
   content.focus();
   const mod = await route.mod();
+  currentMod = mod;
   mod.render(content, param);
 }
 

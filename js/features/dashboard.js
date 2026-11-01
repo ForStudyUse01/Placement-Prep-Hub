@@ -8,6 +8,7 @@ import { renderHTML } from "../dom.js";
 const SECTIONS = [
   ["#/study", "Study material", "DSA fundamentals and AI concepts, with diagrams."],
   ["#/visualizer", "Visualizer", "Step through sorting, search, graph and tree algorithms."],
+  ["#/videolab", "Video Explainer", "Turn a topic, prompt or document into an animated video."],
   ["#/ailiteracy", "AI Literacy test", "Timed MCQs for the Capgemini first section."],
   ["#/mcq", "Company tests", "Capgemini, TCS, Infosys, Wipro, Accenture, Cognizant."],
   ["#/debug", "Debugging arena", "Fix 100 buggy programs in Python, C, C++, Java or JavaScript."],
