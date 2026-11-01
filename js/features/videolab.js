@@ -4,7 +4,7 @@ import { PROVIDERS, getKey, callAI } from "../ai.js";
 import { renderHTML, escapeHtml as esc } from "../dom.js";
 import { get, set } from "../storage.js";
 import { Player, THEMES } from "../video/engine.js";
-import { buildMessages, parseScript, sanitize, offlineFromText, offlineFromTopic, toSrt, shorten, speakable } from "../video/script.js";
+import { buildMessages, buildPolishMessages, qualityIssues, curatedScript, hasCurated, parseScript, sanitize, offlineFromText, offlineFromTopic, toSrt, shorten, speakable } from "../video/script.js";
 import { ENGINES, KOKORO_VOICES, GEMINI_VOICES, rankBrowserVoices, prepareClips } from "../video/tts.js";
 
 let player = null;
@@ -98,7 +98,7 @@ export function render(root) {
           <div class="field" style="border:none;padding-right:8px"><label>Scenes</label><select id="scenes"><option>5</option><option selected>7</option><option>9</option><option>11</option></select></div>
           <div class="field" style="border:none"><label>Level</label><select id="level"><option>Beginner</option><option selected>Exam revision</option><option>Advanced</option></select></div>
           <div class="field" style="border:none;padding-right:8px"><label>Look</label><select id="theme">${Object.keys(THEMES).map((t) => `<option>${t}</option>`).join("")}</select></div>
-          <div class="field" style="border:none"><label>Script writer</label><select id="engine"><option value="ai" ${hasKey ? "" : "disabled"}>AI (your key)</option><option value="offline" ${hasKey ? "" : "selected"}>Offline (no AI)</option></select></div>
+          <div class="field" style="border:none"><label>Script writer</label><select id="engine"><option value="curated" selected>Hand-written lesson (best, 32 topics)</option><option value="ai" ${hasKey ? "" : "disabled"}>AI writes it (your key)</option><option value="offline">Quick outline (no AI)</option></select></div>
         </div>
         <button class="btn" id="gen">Generate video</button>
         <p class="muted" id="status" style="margin:10px 0 0;font-size:13px">${hasKey ? "AI key found. Offline mode works without one." : "No AI key set. Offline mode builds videos from the text you give it, or from a site topic. Add a key in Settings for full AI scripts."}</p>
@@ -129,6 +129,7 @@ export function render(root) {
           <button class="btn secondary" id="rec">Record video (WebM)</button>
           <button class="btn secondary" id="srt">Subtitles (.srt)</button>
           <button class="btn secondary" id="json">Script (.json)</button>
+          <button class="btn secondary" id="polish" ${hasKey ? "" : "disabled"} title="Needs an AI key">Polish script with AI</button>
         </div>
         <p class="muted" id="recNote" style="font-size:12px;margin:0">Recording runs in real time, so it takes as long as the video. With the Neural or Gemini voice the file includes the voice. With the browser voice the file is silent with burned-in captions.</p>
         <div class="chip-filter" id="chips" style="margin-top:12px"></div>
@@ -320,6 +321,22 @@ export function render(root) {
     if ($("#vengine").value !== "browser") ensureVoice();
   };
 
+  $("#polish").addEventListener("click", async () => {
+    if (!script) return status("Generate a video first.", true);
+    const btn = $("#polish");
+    btn.disabled = true;
+    try {
+      status("AI is polishing the narration and labels…");
+      const level = $("#level").value;
+      const r = await callAI({ messages: buildPolishMessages(script, qualityIssues(script), level), maxTokens: 4500, feature: "video-lab" });
+      const s = parseScript(r.text);
+      if (s.scenes.length < script.scenes.length - 1) throw new Error("the model dropped scenes");
+      setScript(s);
+      status(`Polished by ${r.provider}/${r.model}. Press Play.`);
+    } catch (err) { status("Polish failed: " + err.message, true); }
+    btn.disabled = false;
+  });
+
   $("#apply").addEventListener("click", () => {
     try { setScript(sanitize(JSON.parse($("#scriptJson").value))); status("Script applied."); }
     catch (e) { status("Could not apply: " + e.message, true); }
@@ -396,16 +413,33 @@ export function render(root) {
 
     const btn = $("#gen");
     btn.disabled = true;
+    const fallback = () => (siteTopic ? offlineFromTopic(siteTopic, EXTRA[siteTopic.id], count) : offlineFromText(title || "Explainer", doc || prompt || title, count));
     try {
-      if (engine === "ai") {
+      if (engine === "curated") {
+        const lesson = siteTopic && curatedScript(siteTopic.id, count);
+        if (lesson) { setScript(lesson); status("Hand-written lesson loaded. Press Play."); }
+        else { setScript(fallback()); status("No hand-written lesson for this input, so a quick outline was built. Pick a site topic for the best result, or use AI writes it.", true); }
+      } else if (engine === "ai") {
         status("Asking the model to write the script…");
         try {
-          const r = await callAI({ messages: buildMessages({ topic: title, prompt, doc, context, scenes: count, level }), maxTokens: 4000, feature: "video-lab" });
-          setScript(parseScript(r.text));
-          status(`Script written by ${r.provider}/${r.model} (${r.usage.total} tokens). Press Play.`);
+          const r = await callAI({ messages: buildMessages({ topic: title, prompt, doc, context, scenes: count, level }), maxTokens: 4500, feature: "video-lab" });
+          let s = parseScript(r.text);
+          let note = "";
+          const issues = qualityIssues(s);
+          if (issues.length) {
+            status(`Checking quality (${issues.length} issue${issues.length > 1 ? "s" : ""}), improving…`);
+            try {
+              const r2 = await callAI({ messages: buildPolishMessages(s, issues, level), maxTokens: 4500, feature: "video-lab" });
+              const s2 = parseScript(r2.text);
+              if (qualityIssues(s2).length <= issues.length) { s = s2; note = " Improved after a quality check."; }
+            } catch { /* keep the first version */ }
+          }
+          setScript(s);
+          const left = qualityIssues(s);
+          status(`Script written by ${r.provider}/${r.model}.${note}${left.length ? " Remaining notes: " + left.slice(0, 2).join("; ") + "." : ""} Press Play.`);
         } catch (err) {
           status(`AI script failed (${err.message}). Built an offline version instead.`, true);
-          setScript(siteTopic ? offlineFromTopic(siteTopic, EXTRA[siteTopic.id], count) : offlineFromText(title || "Explainer", doc || prompt || title, count));
+          setScript(siteTopic && hasCurated(siteTopic.id) ? curatedScript(siteTopic.id, count) : fallback());
         }
       } else {
         status("Building the video offline…");
